@@ -5,6 +5,7 @@ import { Search, BookOpen, ExternalLink, Copy, Check, Loader2, CheckCircle2, Ale
 import { useToast } from "@/components/ui/toast";
 import { AcademicPaper } from "@/lib/academic/search";
 import { copyToClipboard } from "@/lib/utils/clipboard";
+import { invokeEdgeFunction } from "@/lib/supabase/edge-functions";
 
 export default function ReferencesSearchPage() {
   const { addToast } = useToast();
@@ -29,20 +30,13 @@ export default function ReferencesSearchPage() {
 
     setIsSearching(true);
     try {
-      const res = await fetch("/api/references/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query,
-          course_name: courseName,
-          start_year: startYear,
-          end_year: endYear,
-          limit: 10,
-        }),
+      const data = await invokeEdgeFunction<{ count: number; references: AcademicPaper[] }>("search-references", {
+        query,
+        course_name: courseName,
+        start_year: startYear,
+        end_year: endYear,
+        limit: 10,
       });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Gagal mencari.");
 
       setResults(data.references || []);
       addToast({

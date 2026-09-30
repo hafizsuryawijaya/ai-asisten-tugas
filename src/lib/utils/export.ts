@@ -1,3 +1,5 @@
+import { generateAssignmentDocxBlob, sanitizeFilename, DocxExportInput } from "@/lib/docx/builder";
+
 export interface ExportDocxOptions {
   assignmentId?: string;
   title?: string;
@@ -34,45 +36,32 @@ export async function downloadDocxFile(options: ExportDocxOptions): Promise<bool
   }
 
   try {
-    const res = await fetch("/api/export/docx", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        assignmentId: options.assignmentId,
-        title: options.title,
-        studentName: options.studentName,
-        studentId: options.studentId,
-        courseName: options.courseName,
-        assignmentType: options.assignmentType,
-        question: options.question,
-        answer: options.answer || options.text,
-        references: options.references,
-      }),
-    });
-
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.error || "Gagal mengunduh dokumen Word.");
+    const finalAnswer = options.answer || options.text;
+    if (!finalAnswer) {
+      throw new Error("Konten jawaban tidak boleh kosong.");
     }
 
-    const blob = await res.blob();
-    if (blob.size === 0) {
+    const exportInput: DocxExportInput = {
+      title: options.title || (options.courseName ? `TUGAS ${options.courseName.toUpperCase()}` : "DOKUMEN TUGAS AKADEMIK"),
+      studentName: options.studentName || "Mahasiswa",
+      studentId: options.studentId || "-",
+      courseName: options.courseName || "-",
+      assignmentType: options.assignmentType || "TugasKuliah",
+      question: options.question,
+      answer: finalAnswer,
+      references: options.references,
+    };
+
+    const blob = await generateAssignmentDocxBlob(exportInput);
+
+    if (!blob || blob.size === 0) {
       throw new Error("File dokumen Word kosong.");
     }
 
-    // Extract filename from header or build default
-    let filename = "Tugas_Mahasiswa.docx";
-    const disposition = res.headers.get("content-disposition");
-    if (disposition && disposition.includes("filename=")) {
-      const match = disposition.match(/filename="?([^";]+)"?/);
-      if (match && match[1]) {
-        filename = match[1];
-      }
-    }
+    const baseName = `${options.courseName || "Tugas"}_${options.assignmentType || "Mahasiswa"}_${options.studentName || "User"}`;
+    const filename = `${sanitizeFilename(baseName)}.docx`;
 
-    // Trigger download
+    // Trigger direct client browser download
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -80,7 +69,6 @@ export async function downloadDocxFile(options: ExportDocxOptions): Promise<bool
     document.body.appendChild(link);
     link.click();
 
-    // Cleanup
     document.body.removeChild(link);
     window.URL.revokeObjectURL(url);
 

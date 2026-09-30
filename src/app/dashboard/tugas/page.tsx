@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import React, { useEffect, useState, Suspense } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import {
   BookOpen,
@@ -21,6 +21,7 @@ import { useToast } from "@/components/ui/toast";
 import { createClient } from "@/lib/supabase/client";
 import { copyToClipboard } from "@/lib/utils/clipboard";
 import { downloadDocxFile } from "@/lib/utils/export";
+import { invokeEdgeFunction } from "@/lib/supabase/edge-functions";
 
 interface ReferenceItem {
   id?: string;
@@ -45,11 +46,11 @@ interface AssignmentDetail {
   references?: ReferenceItem[];
 }
 
-export default function AssignmentDetailPage() {
-  const params = useParams();
+function AssignmentDetailContent() {
+  const searchParams = useSearchParams();
   const router = useRouter();
   const { addToast } = useToast();
-  const id = params?.id as string;
+  const id = searchParams.get("id");
 
   const [assignment, setAssignment] = useState<AssignmentDetail | null>(null);
   const [references, setReferences] = useState<ReferenceItem[]>([]);
@@ -64,7 +65,10 @@ export default function AssignmentDetailPage() {
 
   useEffect(() => {
     async function loadAssignment() {
-      if (!id) return;
+      if (!id) {
+        setLoading(false);
+        return;
+      }
 
       if (typeof window !== "undefined") {
         const cached = sessionStorage.getItem(`assignment_${id}`);
@@ -185,21 +189,40 @@ export default function AssignmentDetailPage() {
     setRewriteAction(action);
 
     try {
-      const res = await fetch("/api/assignments/rewrite", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          assignment_id: assignment.id,
-          action,
-          original_question: assignment.question,
-          current_answer: assignment.answer,
-        }),
+      // Invoke Supabase Edge Function for Rewrite
+      const data = await invokeEdgeFunction<{ new_answer: string }>("rewrite-assignment", {
+        assignment_id: assignment.id,
+        action,
+        original_question: assignment.question,
+        current_answer: assignment.answer,
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Gagal merevisi.");
+      const newAnswer = data.new_answer;
+      setAssignment((prev) => (prev ? { ...prev, answer: newAnswer } : null));
 
-      setAssignment((prev) => (prev ? { ...prev, answer: data.new_answer } : null));
+      // Save revision to DB if user is logged in
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (user && assignment.id) {
+          await supabase.from("revisions").insert({
+            assignment_id: assignment.id,
+            type: action,
+            old_content: assignment.answer,
+            new_content: newAnswer,
+          });
+
+          await supabase
+            .from("assignments")
+            .update({ answer: newAnswer, updated_at: new Date().toISOString() })
+            .eq("id", assignment.id)
+            .eq("user_id", user.id);
+        }
+      } catch (dbErr) {
+        console.warn("[Save Revision DB Error]:", dbErr);
+      }
 
       addToast({
         type: "success",
@@ -313,9 +336,9 @@ export default function AssignmentDetailPage() {
 
       {/* MAIN DESKTOP 70% LEFT / 30% RIGHT LAYOUT */}
       <div className="grid grid-cols-1 lg:grid-cols-10 gap-8 items-start">
-        {/* LEFT COLUMN 70% (7/10) */}
+        {/* LEFT COLUMN 70% */}
         <div className="lg:col-span-7 space-y-6">
-          {/* REVISION ACTION BUTTONS TOOLBAR */}
+          {/* REVISION TOOLBAR */}
           <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs space-y-3">
             <p className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
               <Wand2 className="w-4 h-4 text-blue-600" />
@@ -406,7 +429,7 @@ export default function AssignmentDetailPage() {
           </div>
         </div>
 
-        {/* RIGHT COLUMN 30% (3/10) - REFERENSI */}
+        {/* RIGHT COLUMN 30% - REFERENSI */}
         <div className="lg:col-span-3 space-y-4 sticky top-20">
           <div className="bg-white border border-slate-200/80 rounded-3xl p-5 shadow-xs space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
@@ -497,5 +520,20 @@ export default function AssignmentDetailPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function AssignmentDetailPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="py-20 text-center">
+          <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-sm font-medium text-slate-600">Memuat halaman tugas...</p>
+        </div>
+      }
+    >
+      <AssignmentDetailContent />
+    </Suspense>
   );
 }

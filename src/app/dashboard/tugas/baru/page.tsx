@@ -13,6 +13,8 @@ import {
   Calendar,
 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
+import { invokeEdgeFunction } from "@/lib/supabase/edge-functions";
+import { createClient } from "@/lib/supabase/client";
 
 const PROGRESS_STEPS = [
   "Menganalisis soal...",
@@ -25,6 +27,7 @@ const PROGRESS_STEPS = [
 export default function NewAssignmentPage() {
   const router = useRouter();
   const { addToast } = useToast();
+  const supabase = createClient();
 
   const [courseName, setCourseName] = useState("");
   const [assignmentType, setAssignmentType] = useState("Essay");
@@ -55,7 +58,6 @@ export default function NewAssignmentPage() {
     setIsGenerating(true);
     setCurrentStepIndex(0);
 
-    // Live progress state updater interval
     const stepInterval = setInterval(() => {
       setCurrentStepIndex((prev) => {
         if (prev < PROGRESS_STEPS.length - 1) {
@@ -66,32 +68,93 @@ export default function NewAssignmentPage() {
     }, 1200);
 
     try {
-      const res = await fetch("/api/assignments/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          course_name: courseName,
-          assignment_type: assignmentType,
-          question,
-          instructions,
-          writing_style: writingStyle,
-          length,
-          search_references: searchReferences,
-          ref_count: refCount,
-          start_year: startYear,
-          end_year: endYear,
-        }),
+      // Invoke Supabase Edge Function for Gemini Generation
+      const data = await invokeEdgeFunction<{
+        assignment_id: string;
+        answer: string;
+        references?: Array<{
+          title: string;
+          authors?: string;
+          year?: number;
+          journal?: string;
+          doi?: string;
+          url?: string;
+          abstract?: string;
+          source?: string;
+          verified?: boolean;
+        }>;
+      }>("generate-assignment", {
+        course_name: courseName,
+        assignment_type: assignmentType,
+        question,
+        instructions,
+        writing_style: writingStyle,
+        length,
+        search_references: searchReferences,
+        ref_count: refCount,
+        start_year: startYear,
+        end_year: endYear,
       });
 
       clearInterval(stepInterval);
 
-      const data = await res.json();
+      // Save to Supabase DB if user is logged in
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
 
-      if (!res.ok) {
-        throw new Error(data.error || "Gagal menyusun jawaban.");
+        if (user) {
+          const { data: dbAssignment, error: dbErr } = await supabase
+            .from("assignments")
+            .insert({
+              user_id: user.id,
+              course_name: courseName,
+              assignment_type: assignmentType,
+              question,
+              instructions,
+              writing_style: writingStyle,
+              length,
+              answer: data.answer,
+            })
+            .select()
+            .single();
+
+          if (!dbErr && dbAssignment) {
+            data.assignment_id = dbAssignment.id;
+
+            if (data.references && Array.isArray(data.references) && data.references.length > 0) {
+              const refRows = data.references.map((r: {
+                title: string;
+                authors?: string;
+                year?: number;
+                journal?: string;
+                doi?: string;
+                url?: string;
+                abstract?: string;
+                source?: string;
+                verified?: boolean;
+              }) => ({
+                assignment_id: dbAssignment.id,
+                title: r.title,
+                authors: r.authors,
+                year: r.year,
+                journal: r.journal,
+                doi: r.doi,
+                url: r.url,
+                abstract: r.abstract,
+                source: r.source,
+                verified: r.verified,
+              }));
+
+              await supabase.from("references").insert(refRows);
+            }
+          }
+        }
+      } catch (dbError) {
+        console.warn("[Save DB Error]:", dbError);
       }
 
-      // Final step highlight
       setCurrentStepIndex(PROGRESS_STEPS.length - 1);
 
       addToast({
@@ -100,13 +163,12 @@ export default function NewAssignmentPage() {
         description: "Mengalihkan ke halaman hasil...",
       });
 
-      // Save output in sessionStorage as immediate fallback
       if (typeof window !== "undefined") {
         sessionStorage.setItem(`assignment_${data.assignment_id}`, JSON.stringify(data));
       }
 
       setTimeout(() => {
-        router.push(`/dashboard/tugas/${data.assignment_id}`);
+        router.push(`/dashboard/tugas?id=${data.assignment_id}`);
       }, 500);
     } catch (err: unknown) {
       clearInterval(stepInterval);
@@ -122,7 +184,6 @@ export default function NewAssignmentPage() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-8">
-      {/* HEADER */}
       <div>
         <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
           <BookOpen className="w-7 h-7 text-blue-600" />
@@ -133,7 +194,6 @@ export default function NewAssignmentPage() {
         </p>
       </div>
 
-      {/* GENERATION PROGRESS MODAL OVERLAY */}
       {isGenerating && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl border border-slate-100 text-center space-y-6 animate-in fade-in zoom-in-95">
@@ -149,7 +209,6 @@ export default function NewAssignmentPage() {
               </p>
             </div>
 
-            {/* PROGRESS STEPS LIST */}
             <div className="space-y-3 text-left bg-slate-50 p-4 rounded-2xl border border-slate-200/60">
               {PROGRESS_STEPS.map((step, idx) => {
                 const isDone = idx < currentStepIndex;
@@ -182,10 +241,8 @@ export default function NewAssignmentPage() {
         </div>
       )}
 
-      {/* FORM CARD */}
       <form onSubmit={handleSubmit} className="bg-white border border-slate-200/80 rounded-3xl p-6 sm:p-8 shadow-xs space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* MATA KULIAH */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
               Mata Kuliah *
@@ -200,7 +257,6 @@ export default function NewAssignmentPage() {
             />
           </div>
 
-          {/* JENIS TUGAS */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
               Jenis Tugas *
@@ -219,7 +275,6 @@ export default function NewAssignmentPage() {
           </div>
         </div>
 
-        {/* SOAL / PERTANYAAN */}
         <div>
           <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
             Pertanyaan / Soal Tugas *
@@ -234,7 +289,6 @@ export default function NewAssignmentPage() {
           />
         </div>
 
-        {/* INSTRUKSI TAMBAHAN */}
         <div>
           <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
             Instruksi Tambahan (Opsional)
@@ -248,7 +302,6 @@ export default function NewAssignmentPage() {
           />
         </div>
 
-        {/* GAYA BAHASA & PANJANG JAWABAN */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2 border-t border-slate-100">
           <div>
             <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
@@ -297,7 +350,6 @@ export default function NewAssignmentPage() {
           </div>
         </div>
 
-        {/* REFERENSI SECTION */}
         <div className="pt-4 border-t border-slate-100 space-y-4">
           <div className="flex items-center justify-between">
             <label className="flex items-center gap-2 cursor-pointer">
@@ -355,7 +407,6 @@ export default function NewAssignmentPage() {
           )}
         </div>
 
-        {/* SUBMIT BUTTON */}
         <div className="pt-4">
           <button
             type="submit"

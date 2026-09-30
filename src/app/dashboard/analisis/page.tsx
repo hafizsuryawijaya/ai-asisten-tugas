@@ -15,11 +15,14 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
-import { WritingAnalysisReport } from "@/lib/detection/provider";
+import { WritingAnalysisReport, analyzeWritingQuality } from "@/lib/detection/provider";
 import { downloadDocxFile } from "@/lib/utils/export";
+import { invokeEdgeFunction } from "@/lib/supabase/edge-functions";
+import { createClient } from "@/lib/supabase/client";
 
 export default function AnalysisPage() {
   const { addToast } = useToast();
+  const supabase = createClient();
   const [content, setContent] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [report, setReport] = useState<WritingAnalysisReport | null>(null);
@@ -45,16 +48,27 @@ export default function AnalysisPage() {
     setRevisedText("");
 
     try {
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content }),
-      });
+      // Analyze client-side instantly
+      const generatedReport = analyzeWritingQuality(content);
+      setReport(generatedReport);
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Gagal menganalisis.");
+      // Optionally save to Supabase DB if user is logged in
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
 
-      setReport(data.report);
+        if (user) {
+          await supabase.from("analyses").insert({
+            user_id: user.id,
+            content,
+            report: generatedReport,
+          });
+        }
+      } catch (dbErr) {
+        console.warn("[Save Analysis DB Error]:", dbErr);
+      }
+
       addToast({
         type: "success",
         title: "Analisis Selesai",
@@ -78,18 +92,11 @@ export default function AnalysisPage() {
 
     setIsImproving(true);
     try {
-      const res = await fetch("/api/assignments/rewrite", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "natural",
-          original_question: "Perbaiki tulisan berikut agar memiliki struktur runtut, gaya bahasa akademik natural, dan kejelasan tinggi.",
-          current_answer: textToImprove,
-        }),
+      const data = await invokeEdgeFunction<{ new_answer: string }>("rewrite-assignment", {
+        action: "natural",
+        original_question: "Perbaiki tulisan berikut agar memiliki struktur runtut, gaya bahasa akademik natural, dan kejelasan tinggi.",
+        current_answer: textToImprove,
       });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Gagal memperbaiki tulisan.");
 
       setRevisedText(data.new_answer);
       addToast({
@@ -113,16 +120,8 @@ export default function AnalysisPage() {
     if (!revisedText.trim()) return;
     setIsAnalyzing(true);
     try {
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: revisedText }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Gagal menganalisis.");
-
-      setReport(data.report);
+      const generatedReport = analyzeWritingQuality(revisedText);
+      setReport(generatedReport);
       setContent(revisedText);
       addToast({
         type: "success",

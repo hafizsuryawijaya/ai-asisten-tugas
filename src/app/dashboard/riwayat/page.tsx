@@ -209,7 +209,7 @@ export default function HistoryPage() {
 
                 <div className="flex items-center gap-2 shrink-0">
                   <Link
-                    href={`/dashboard/tugas/${item.id}`}
+                    href={`/dashboard/tugas?id=${item.id}`}
                     className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs transition shadow-2xs"
                   >
                     Buka

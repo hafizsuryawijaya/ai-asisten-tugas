@@ -231,7 +231,7 @@ export default function DashboardPage() {
                 </div>
 
                 <Link
-                  href={`/dashboard/tugas/${item.id}`}
+                  href={`/dashboard/tugas?id=${item.id}`}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 hover:border-blue-300 bg-white text-slate-700 hover:text-blue-600 text-xs font-semibold transition shrink-0"
                 >
                   Buka Jawaban

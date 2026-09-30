@@ -494,3 +494,317 @@ export async function generateAssignmentDocx(input: DocxExportInput): Promise<Bu
 
   return await Packer.toBuffer(doc);
 }
+
+/**
+ * Generate native DOCX Blob for browser download
+ */
+export async function generateAssignmentDocxBlob(input: DocxExportInput): Promise<Blob> {
+  const children: Paragraph[] = [];
+
+  const mainTitle =
+    input.title ||
+    `TUGAS ${input.assignmentType ? input.assignmentType.toUpperCase() : "AKADEMIK"}`;
+
+  // 1. HEADER TITLE
+  children.push(
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { line: 360, before: 120, after: 240 },
+      children: [
+        new TextRun({
+          text: mainTitle,
+          font: "Times New Roman",
+          size: 28,
+          bold: true,
+          color: "000000",
+        }),
+      ],
+    })
+  );
+
+  // 2. METADATA MAHASISWA & TUGAS
+  const metaLines = [
+    { label: "Nama Mahasiswa", val: input.studentName || "-" },
+    { label: "NIM", val: input.studentId || "-" },
+    { label: "Mata Kuliah", val: input.courseName || "-" },
+    { label: "Jenis Tugas", val: input.assignmentType || "-" },
+  ];
+
+  metaLines.forEach((m) => {
+    children.push(
+      new Paragraph({
+        alignment: AlignmentType.LEFT,
+        spacing: { line: 360, after: 60 },
+        children: [
+          new TextRun({
+            text: `${m.label.padEnd(16, " ")}: `,
+            font: "Times New Roman",
+            size: 24,
+            bold: true,
+            color: "000000",
+          }),
+          new TextRun({
+            text: m.val,
+            font: "Times New Roman",
+            size: 24,
+            color: "000000",
+          }),
+        ],
+      })
+    );
+  });
+
+  children.push(
+    new Paragraph({
+      spacing: { line: 360, after: 240 },
+      children: [],
+    })
+  );
+
+  // 3. SOAL TUGAS
+  if (input.question) {
+    children.push(
+      new Paragraph({
+        alignment: AlignmentType.LEFT,
+        spacing: { line: 360, before: 120, after: 60 },
+        children: [
+          new TextRun({
+            text: "Soal / Pertanyaan Tugas:",
+            font: "Times New Roman",
+            size: 24,
+            bold: true,
+            color: "000000",
+          }),
+        ],
+      })
+    );
+
+    children.push(
+      new Paragraph({
+        alignment: AlignmentType.JUSTIFIED,
+        spacing: { line: 360, after: 240 },
+        indent: { left: 360, right: 360 },
+        children: parseInlineFormatting(input.question, { defaultItalic: true }),
+      })
+    );
+  }
+
+  // 4. PARSE MARKDOWN ANSWER BODY
+  const rawAnswer = input.answer || "";
+  const lines = rawAnswer.replace(/\r\n/g, "\n").split("\n");
+  let inDaftarPustaka = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i];
+    const trimmed = rawLine.trim();
+
+    if (!trimmed) continue;
+
+    if (/^(#+\s*)?(DAFTAR PUSTAKA|REFERENSI|REFERENCES)$/i.test(trimmed)) {
+      inDaftarPustaka = true;
+      children.push(
+        new Paragraph({
+          alignment: AlignmentType.LEFT,
+          spacing: { line: 360, before: 360, after: 180 },
+          children: [
+            new TextRun({
+              text: "DAFTAR PUSTAKA",
+              font: "Times New Roman",
+              size: 28,
+              bold: true,
+              color: "000000",
+            }),
+          ],
+        })
+      );
+      continue;
+    }
+
+    if (
+      trimmed.startsWith("# ") ||
+      /^(Pendahuluan|Pembahasan|Kesimpulan|BAB\s+[IVXLCDM]+\s*.*)$/i.test(
+        trimmed.replace(/\*\*/g, "")
+      )
+    ) {
+      const headingText = trimmed
+        .replace(/^#\s+/, "")
+        .replace(/\*\*/g, "")
+        .trim();
+      children.push(
+        new Paragraph({
+          alignment: AlignmentType.LEFT,
+          spacing: { line: 360, before: 240, after: 120 },
+          children: [
+            new TextRun({
+              text: headingText,
+              font: "Times New Roman",
+              size: 28,
+              bold: true,
+              color: "000000",
+            }),
+          ],
+        })
+      );
+      continue;
+    }
+
+    if (trimmed.startsWith("## ")) {
+      const headingText = trimmed.replace(/^##\s+/, "").trim();
+      children.push(
+        new Paragraph({
+          alignment: AlignmentType.LEFT,
+          spacing: { line: 360, before: 180, after: 100 },
+          children: [
+            new TextRun({
+              text: headingText,
+              font: "Times New Roman",
+              size: 26,
+              bold: true,
+              color: "000000",
+            }),
+          ],
+        })
+      );
+      continue;
+    }
+
+    if (trimmed.startsWith("### ") || trimmed.startsWith("#### ")) {
+      const headingText = trimmed.replace(/^#+\s+/, "").trim();
+      children.push(
+        new Paragraph({
+          alignment: AlignmentType.LEFT,
+          spacing: { line: 360, before: 120, after: 60 },
+          children: [
+            new TextRun({
+              text: headingText,
+              font: "Times New Roman",
+              size: 24,
+              bold: true,
+              color: "000000",
+            }),
+          ],
+        })
+      );
+      continue;
+    }
+
+    if (/^[-*•]\s+/.test(trimmed)) {
+      const itemText = trimmed.replace(/^[-*•]\s+/, "").trim();
+      children.push(
+        new Paragraph({
+          alignment: AlignmentType.JUSTIFIED,
+          spacing: { line: 360, after: 60 },
+          indent: { left: 720, hanging: 360 },
+          children: [
+            new TextRun({
+              text: "• ",
+              font: "Times New Roman",
+              size: 24,
+              bold: true,
+              color: "000000",
+            }),
+            ...parseInlineFormatting(itemText),
+          ],
+        })
+      );
+      continue;
+    }
+
+    const numMatch = trimmed.match(/^(\d+[\.\)])\s+(.*)/);
+    if (numMatch) {
+      const prefix = numMatch[1];
+      const itemText = numMatch[2];
+      children.push(
+        new Paragraph({
+          alignment: AlignmentType.JUSTIFIED,
+          spacing: { line: 360, after: 60 },
+          indent: { left: 720, hanging: 360 },
+          children: [
+            new TextRun({
+              text: `${prefix} `,
+              font: "Times New Roman",
+              size: 24,
+              bold: true,
+              color: "000000",
+            }),
+            ...parseInlineFormatting(itemText),
+          ],
+        })
+      );
+      continue;
+    }
+
+    if (inDaftarPustaka) {
+      children.push(
+        new Paragraph({
+          alignment: AlignmentType.JUSTIFIED,
+          spacing: { line: 360, after: 120 },
+          indent: { left: 720, hanging: 720 },
+          children: parseInlineFormatting(trimmed),
+        })
+      );
+      continue;
+    }
+
+    children.push(
+      new Paragraph({
+        alignment: AlignmentType.JUSTIFIED,
+        spacing: { line: 360, after: 120 },
+        indent: { firstLine: 720 },
+        children: parseInlineFormatting(trimmed),
+      })
+    );
+  }
+
+  // 5. APPEND DAFTAR PUSTAKA
+  if (!inDaftarPustaka && input.references && input.references.length > 0) {
+    children.push(
+      new Paragraph({
+        alignment: AlignmentType.LEFT,
+        spacing: { line: 360, before: 360, after: 180 },
+        children: [
+          new TextRun({
+            text: "DAFTAR PUSTAKA",
+            font: "Times New Roman",
+            size: 28,
+            bold: true,
+            color: "000000",
+          }),
+        ],
+      })
+    );
+
+    input.references.forEach((ref) => {
+      const apaText = formatAPACitationText(ref);
+      children.push(
+        new Paragraph({
+          alignment: AlignmentType.JUSTIFIED,
+          spacing: { line: 360, after: 144 },
+          indent: { left: 720, hanging: 720 },
+          children: parseInlineFormatting(apaText),
+        })
+      );
+    });
+  }
+
+  const doc = new Document({
+    sections: [
+      {
+        properties: {
+          page: {
+            margin: {
+              top: 1440,
+              right: 1440,
+              bottom: 1440,
+              left: 1440,
+            },
+          },
+        },
+        children,
+      },
+    ],
+  });
+
+  return await Packer.toBlob(doc);
+}
+
